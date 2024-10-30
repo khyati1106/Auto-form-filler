@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: cloud term project B00950872
+Resources:
+  S3bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: khyatiscanneddocs
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - PUT
+              - POST
+              - DELETE
+              - GET
+            AllowedOrigins:
+              - '*'
+            MaxAge: 100
+    DeletionPolicy: Retain
+  
+  fetchDataLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: fetchData
+      Runtime: python3.12
+      Role: arn:aws:iam::851725236848:role/LabRole
+      Handler: lambda/lambda_function.lambda_handler
+      Code:
+        S3Bucket: khyaticodebucket
+        S3Key: lambda.zip
+      Timeout: 120
+  
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: autoFormFiller
+      BinaryMediaTypes:
+        - /image/jpeg
+        - image/jpeg
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: fetchData
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref ApiGatewayResource
+      RestApiId: !Ref ApiGateway
+      ApiKeyRequired: false
+      Integration:
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        Type: AWS
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${fetchDataLambda.Arn}/invocations
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+  
+  ApiGatewayUploadBucketResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: '{bucket}'
+  ApiGatewayUploadKeyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !Ref ApiGatewayUploadBucketResource
+      PathPart: '{key}'
+  ApiGatewayUploadMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: PUT
+      ResourceId: !Ref ApiGatewayUploadKeyResource
+      RestApiId: !Ref ApiGateway
+      ApiKeyRequired: false
+      RequestParameters:
+        method.request.path.bucket: true
+        method.request.path.key: true
+      Integration:
+        Credentials: arn:aws:iam::851725236848:role/LabRole
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        IntegrationHttpMethod: PUT
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'PUT'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        Type: AWS
+        Uri: !Sub arn:aws:apigateway:us-east-1:s3:path/{bucket}/{key}
+        RequestParameters:
+          integration.request.path.bucket: method.request.path.bucket
+          integration.request.path.key: method.request.path.key
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+  
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiGatewayMethod
+      - ApiGatewayUploadMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+  ApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    DependsOn: ApiGatewayDeployment
+    Properties:
+      RestApiId: !Ref ApiGateway
+      DeploymentId: !Ref ApiGatewayDeployment
+      StageName: prod
+  FetchDataLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref fetchDataLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/POST/fetchData
+  
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP/HTTPS and SSH inbound traffic
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5001
+          ToPort: 5001
+          CidrIp: 0.0.0.0/0
+  FormFillerEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: ami-080e1f13689e07408
+      KeyName: csci5409-a2
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: MyBackupPlan
+        BackupPlanRule:
+          - RuleName: DailyBackup
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: "cron(0 5 * * ? *)"
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: MyBackupVault
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: S3Backup
+        IamRoleArn: arn:aws:iam::851725236848:role/LabRole
+        Resources:
+          - !Sub arn:aws:s3:::${S3bucket}
